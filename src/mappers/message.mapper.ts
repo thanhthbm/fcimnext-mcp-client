@@ -11,25 +11,21 @@ type DbMessageLike = {
 export function toLlmMessages(messages: DbMessageLike[]): LlmMessage[] {
   return messages
     .filter((message) => {
-      return ["system", "user", "assistant", "tool"].includes(message.role);
+      if (message.role === "tool") {
+        return false;
+      }
+
+      if (message.role === "assistant" && Array.isArray(message.toolCalls)) {
+        return false;
+      }
+
+      return ["system", "user", "assistant"].includes(message.role);
     })
     .map((message) => {
       if (message.role === "assistant") {
         return {
           role: "assistant",
           content: message.content ?? "",
-          toolCalls: Array.isArray(message.toolCalls)
-            ? message.toolCalls
-            : undefined,
-        };
-      }
-
-      if (message.role === "tool") {
-        return {
-          role: "tool",
-          content: message.content ?? "",
-          toolCallId: message.toolCallId ?? "",
-          toolName: message.toolName ?? "",
         };
       }
 
