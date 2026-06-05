@@ -1,6 +1,7 @@
 import { AppError } from "../errors/app-error.js";
+import { oauthTokenRepository } from "../repositories/oauth-token.repository.js";
 import { oauthService } from "../services/oauth.services.js";
-import { oauthTokenStore } from "../oauth/oauth-token.store.js";
+import { McpResource, McpResourceContent } from "../types/mcp-resource.type.js";
 import type { McpClient } from "../types/mcp.type.js";
 import type {
   ToolCall,
@@ -8,55 +9,28 @@ import type {
   ToolResult,
 } from "../types/tool.type.js";
 
+const DEV_USER_ID = "dev-user";
+const TOKEN_REFRESH_SKEW_MS = 60 * 1000;
+
 export const facMcpClient: McpClient = {
-  async listTools(): Promise<ToolDefinition[]> {
-    const token = oauthTokenStore.get();
-
-    if (!token?.accessToken) {
-      throw new AppError(
-        "FAC OAuth token is missing. Connect OAuth first.",
-        401,
-      );
-    }
-
+  async listTools(context): Promise<ToolDefinition[]> {
+    const token = await getValidAccessToken(context?.userId);
     const discovery = await oauthService.discover();
+    const mcpEndpoint = getMcpEndpoint(discovery);
 
-    if (!discovery.mcp_endpoint) {
-      throw new AppError(
-        "OAuth discovery response does not include mcp_endpoint",
-        502,
-      );
-    }
-
-    const response = await fetch(discovery.mcp_endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `${token.tokenType} ${token.accessToken}`,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: crypto.randomUUID(),
-        method: "tools/list",
-        params: {},
-      }),
+    const body = await callMcpEndpoint({
+      mcpEndpoint,
+      accessToken: token.accessToken,
+      tokenType: token.tokenType,
+      method: "tools/list",
+      params: {},
     });
-
-    const body = await response.json();
-
-    if (!response.ok || body.error) {
-      throw new AppError("FAC MCP tools/list failed", 502, {
-        status: response.status,
-        body,
-      });
-    }
 
     return mapMcpTools(body.result?.tools ?? []);
   },
 
   async callTool(toolCall: ToolCall): Promise<ToolResult> {
-    const token = getAccessToken();
+    const token = await getValidAccessToken(toolCall.userId);
     const discovery = await oauthService.discover();
     const mcpEndpoint = getMcpEndpoint(discovery);
 
@@ -72,16 +46,18 @@ export const facMcpClient: McpClient = {
     });
 
     const result = body.result ?? body;
+    const normalizedResult = normalizeMcpResult(result);
 
     return {
       toolCallId: toolCall.id,
       toolName: toolCall.name,
-      content: normalizeMcpResult(result),
-      isError: Boolean(body.error || result?.isError),
+      content: normalizedResult,
+      isError: hasMcpError(body, result),
     };
   },
-  async listResources() {
-    const token = getAccessToken();
+
+  async listResources(context): Promise<McpResource[]> {
+    const token = await getValidAccessToken(context?.userId);
     const discovery = await oauthService.discover();
     const mcpEndpoint = getMcpEndpoint(discovery);
 
@@ -92,12 +68,14 @@ export const facMcpClient: McpClient = {
       method: "resources/list",
       params: {},
     });
-
     return mapMcpResources(body.result?.resources ?? []);
   },
 
-  async readResource(uri: string) {
-    const token = getAccessToken();
+  async readResource(
+    uri: string,
+    context,
+  ): Promise<McpResourceContent[]> {
+    const token = await getValidAccessToken(context?.userId);
     const discovery = await oauthService.discover();
     const mcpEndpoint = getMcpEndpoint(discovery);
 
@@ -115,14 +93,70 @@ export const facMcpClient: McpClient = {
   },
 };
 
-function getAccessToken() {
-  const token = oauthTokenStore.get();
+async function getValidAccessToken(userId = DEV_USER_ID) {
+  const frappeBaseUrl = getFrappeBaseUrl();
 
-  if (!token?.accessToken) {
+  const token = await oauthTokenRepository.findByUserAndSite({
+    frappeBaseUrl,
+    userId,
+  });
+
+  if (!token) {
     throw new AppError("FAC OAuth token is missing. Connect OAuth first.", 401);
   }
 
-  return token;
+  const expiresAtMs = token.expiresAt?.getTime();
+
+  const shouldRefresh =
+    expiresAtMs && Date.now() > expiresAtMs - TOKEN_REFRESH_SKEW_MS;
+
+  if (!shouldRefresh) {
+    return {
+      accessToken: token.accessToken,
+      tokenType: token.tokenType || "Bearer",
+    };
+  }
+
+  if (!token.refreshToken) {
+    throw new AppError(
+      "FAC refresh token is missing. Connect OAuth again.",
+      401,
+    );
+  }
+
+  const refreshed = await oauthService.refreshAccessToken({
+    refreshToken: token.refreshToken,
+  });
+
+  const refreshedExpiresAt = refreshed.expires_in
+    ? new Date(Date.now() + refreshed.expires_in * 1000)
+    : undefined;
+
+  const updatedToken = await oauthTokenRepository.upsert({
+    frappeBaseUrl,
+    userId,
+    accessToken: refreshed.access_token,
+    refreshToken: refreshed.refresh_token ?? token.refreshToken,
+    idToken: refreshed.id_token ?? token.idToken,
+    tokenType: refreshed.token_type,
+    scope: refreshed.scope,
+    expiresAt: refreshedExpiresAt,
+  });
+
+  return {
+    accessToken: updatedToken.accessToken,
+    tokenType: updatedToken.tokenType || "Bearer",
+  };
+}
+
+function getFrappeBaseUrl(): string {
+  const baseUrl = process.env.FRAPPE_BASE_URL;
+
+  if (!baseUrl) {
+    throw new AppError("Missing FRAPPE_BASE_URL", 500);
+  }
+
+  return baseUrl.replace(/\/$/, "");
 }
 
 function getMcpEndpoint(discovery: { mcp_endpoint?: string }): string {
@@ -215,14 +249,9 @@ function normalizeMcpResult(result: unknown): unknown {
   }
 
   const text = textParts.join("\n");
-
   const parsed = tryParseJson(text);
 
-  if (parsed !== null) {
-    return parsed;
-  }
-
-  return text;
+  return parsed ?? text;
 }
 
 function tryParseJson(text: string): unknown | null {
@@ -233,7 +262,33 @@ function tryParseJson(text: string): unknown | null {
   }
 }
 
-function mapMcpResources(resources: unknown[]) {
+function hasMcpError(body: unknown, result: unknown): boolean {
+  const bodyValue = body as { error?: unknown };
+  const resultValue = result as { isError?: boolean };
+
+  return Boolean(bodyValue.error || resultValue.isError);
+}
+
+function mapMcpResourceContents(contents: unknown[]): McpResourceContent[] {
+  return contents
+    .map((content) => {
+      const value = content as {
+        uri?: string;
+        mimeType?: string;
+        mime_type?: string;
+        text?: string;
+      };
+
+      return {
+        uri: value.uri ?? "",
+        mimeType: value.mimeType ?? value.mime_type,
+        text: value.text ?? "",
+      };
+    })
+    .filter((content) => content.uri && content.text);
+}
+
+function mapMcpResources(resources: unknown[]): McpResource[] {
   return resources
     .map((resource) => {
       const value = resource as {
@@ -252,23 +307,4 @@ function mapMcpResources(resources: unknown[]) {
       };
     })
     .filter((resource) => resource.uri);
-}
-
-function mapMcpResourceContents(contents: unknown[]) {
-  return contents
-    .map((content) => {
-      const value = content as {
-        uri?: string;
-        mimeType?: string;
-        mime_type?: string;
-        text?: string;
-      };
-
-      return {
-        uri: value.uri ?? "",
-        mimeType: value.mimeType ?? value.mime_type,
-        text: value.text ?? "",
-      };
-    })
-    .filter((content) => content.uri && content.text);
 }

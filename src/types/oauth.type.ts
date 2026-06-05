@@ -28,6 +28,10 @@ export type OAuthTokenResponse = {
   id_token?: string;
 };
 
+export type OAuthTokenExchangeResult = OAuthTokenResponse & {
+  userId?: string;
+};
+
 export type OAuthToken = {
   accessToken: string;
   refreshToken?: string;

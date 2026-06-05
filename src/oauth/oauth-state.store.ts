@@ -1,6 +1,7 @@
 type OAuthState = {
   codeVerifier: string;
   createdAt: number;
+  userId?: string;
 };
 
 const states = new Map<string, OAuthState>();

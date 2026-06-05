@@ -6,9 +6,11 @@ import {
 
 import { AppError } from "../errors/app-error.js";
 import { oauthStateStore } from "../oauth/oauth-state.store.js";
+import { oauthClientRepository } from "../repositories/oauth-client.repository.js";
 import type {
   OAuthDiscovery,
   OAuthRegisteredClient,
+  OAuthTokenExchangeResult,
   OAuthTokenResponse,
 } from "../types/oauth.type.js";
 
@@ -32,14 +34,26 @@ function getOAuthRedirectUri(): string {
   return redirectUri;
 }
 
-function getClientId(): string {
-  const clientId = process.env.FRAPPE_OAUTH_CLIENT_ID;
+async function getOrRegisterOAuthClient() {
+  const frappeBaseUrl = getFrappeBaseUrl();
 
-  if (!clientId) {
-    throw new AppError("Missing FRAPPE_OAUTH_CLIENT_ID", 500);
+  const existingClient =
+    await oauthClientRepository.findByFrappeBaseUrl(frappeBaseUrl);
+
+  if (existingClient) {
+    return existingClient;
   }
 
-  return clientId;
+  const client = await oauthService.registerClient();
+
+  const savedClient =
+    await oauthClientRepository.findByFrappeBaseUrl(frappeBaseUrl);
+
+  if (!savedClient) {
+    throw new AppError("OAuth client registration was not persisted", 500);
+  }
+
+  return savedClient;
 }
 
 export const oauthService = {
@@ -75,6 +89,8 @@ export const oauthService = {
       );
     }
 
+    const frappeBaseUrl = getFrappeBaseUrl();
+
     const response = await fetch(discovery.registration_endpoint, {
       method: "POST",
       headers: {
@@ -98,11 +114,23 @@ export const oauthService = {
       });
     }
 
-    return response.json() as Promise<OAuthRegisteredClient>;
+    const client = (await response.json()) as OAuthRegisteredClient;
+
+    await oauthClientRepository.upsert({
+      frappeBaseUrl,
+      clientId: client.client_id,
+      clientSecret: client.client_secret,
+      clientName: client.client_name,
+      redirectUris: client.redirect_uris,
+      tokenEndpointAuthMethod: client.token_endpoint_auth_method,
+    });
+
+    return client;
   },
 
-  async buildAuthorizationUrl(): Promise<string> {
+  async buildAuthorizationUrl(params?: { userId?: string }): Promise<string> {
     const discovery = await this.discover();
+    const client = await getOrRegisterOAuthClient();
 
     const codeVerifier = randomPKCECodeVerifier();
     const codeChallenge = await calculatePKCECodeChallenge(codeVerifier);
@@ -111,12 +139,13 @@ export const oauthService = {
     oauthStateStore.save(state, {
       codeVerifier,
       createdAt: Date.now(),
+      userId: params?.userId,
     });
 
     const url = new URL(discovery.authorization_endpoint);
 
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("client_id", getClientId());
+    url.searchParams.set("client_id", client.clientId);
     url.searchParams.set("redirect_uri", getOAuthRedirectUri());
     url.searchParams.set("scope", "all openid");
     url.searchParams.set("code_challenge", codeChallenge);
@@ -129,7 +158,7 @@ export const oauthService = {
   async exchangeCodeForToken(params: {
     code: string;
     state: string;
-  }): Promise<OAuthTokenResponse> {
+  }): Promise<OAuthTokenExchangeResult> {
     const savedState = oauthStateStore.consume(params.state);
 
     if (!savedState) {
@@ -137,14 +166,25 @@ export const oauthService = {
     }
 
     const discovery = await this.discover();
+    const client = await getOrRegisterOAuthClient();
 
     const body = new URLSearchParams();
 
     body.set("grant_type", "authorization_code");
     body.set("code", params.code);
     body.set("redirect_uri", getOAuthRedirectUri());
-    body.set("client_id", getClientId());
+    body.set("client_id", client.clientId);
     body.set("code_verifier", savedState.codeVerifier);
+
+    // Với token_endpoint_auth_method = none thì không cần client_secret.
+    // Nếu sau này đổi sang client_secret_post, mở đoạn này:
+    if (
+      client.tokenEndpointAuthMethod &&
+      client.tokenEndpointAuthMethod !== "none" &&
+      client.clientSecret
+    ) {
+      body.set("client_secret", client.clientSecret);
+    }
 
     const response = await fetch(discovery.token_endpoint, {
       method: "POST",
@@ -157,6 +197,50 @@ export const oauthService = {
 
     if (!response.ok) {
       throw new AppError("OAuth token exchange failed", 502, {
+        status: response.status,
+        body: await response.text(),
+      });
+    }
+
+    const token = (await response.json()) as OAuthTokenResponse;
+
+    return {
+      ...token,
+      userId: savedState.userId,
+    };
+  },
+
+  async refreshAccessToken(params: {
+    refreshToken: string;
+  }): Promise<OAuthTokenResponse> {
+    const discovery = await this.discover();
+    const client = await getOrRegisterOAuthClient();
+
+    const body = new URLSearchParams();
+
+    body.set("grant_type", "refresh_token");
+    body.set("refresh_token", params.refreshToken);
+    body.set("client_id", client.clientId);
+
+    if (
+      client.tokenEndpointAuthMethod &&
+      client.tokenEndpointAuthMethod !== "none" &&
+      client.clientSecret
+    ) {
+      body.set("client_secret", client.clientSecret);
+    }
+
+    const response = await fetch(discovery.token_endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body,
+    });
+
+    if (!response.ok) {
+      throw new AppError("OAuth token refresh failed", 502, {
         status: response.status,
         body: await response.text(),
       });

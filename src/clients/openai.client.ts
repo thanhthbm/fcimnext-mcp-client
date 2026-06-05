@@ -9,44 +9,29 @@ import type {
 } from "../types/llm.type.js";
 import type { ToolCall, ToolDefinition } from "../types/tool.type.js";
 
-const deepseek = new OpenAI({
-  baseURL: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
-  apiKey: process.env.DEEPSEEK_API_KEY || "missing-key",
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || "missing-key",
 });
 
-export const deepseekClient: LlmClient = {
+export const openaiClient: LlmClient = {
   async chat(input: LlmChatInput): Promise<LlmChatOutput> {
-    if (!process.env.DEEPSEEK_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       throw new LlmError({
-        provider: "deepseek",
-        message: "Missing DEEPSEEK_API_KEY",
+        provider: "openai",
+        message: "Missing OPENAI_API_KEY",
         statusCode: 500,
       });
     }
 
-    const model = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+    const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
     try {
-      const response = await deepseek.chat.completions.create({
+      const response = await openai.chat.completions.create({
         model,
         messages: [
           {
             role: "system",
-            content: `
-                You are a helpful assistant. Answer in Vietnamese.
-
-                Output format:
-                - Use GitHub-Flavored Markdown.
-                - Do not output raw HTML.
-                - Prefer concise sections and bullet lists.
-                - Prefer bullet lists over tables unless a table clearly improves readability.
-                - If you use a table:
-                - Put one blank line before and after the table.
-                - Include a header row and separator row.
-                - Keep the same number of columns in every row.
-                - Do not wrap the table in a code block.
-                - Do not indent table rows.
-                `,
+            content: "You are a helpful assistant. Answer in Vietnamese.",
           },
           ...input.messages.map(toOpenAiMessage),
         ],
@@ -72,14 +57,14 @@ export const deepseekClient: LlmClient = {
         content: responseMessage?.content ?? null,
         toolCalls: toolCalls?.length ? toolCalls : undefined,
         metadata: {
-          provider: "deepseek",
+          provider: "openai",
           model,
           usage: response.usage,
           finishReason: response.choices[0]?.finish_reason,
         },
       };
     } catch (error) {
-      throw normalizeDeepSeekError(error);
+      throw normalizeOpenAiError(error);
     }
   },
 };
@@ -146,11 +131,11 @@ function safeParseJsonObject(raw: string): Record<string, unknown> {
   }
 }
 
-function normalizeDeepSeekError(error: unknown): LlmError {
+function normalizeOpenAiError(error: unknown): LlmError {
   if (error instanceof OpenAI.APIError) {
     return new LlmError({
-      provider: "deepseek",
-      message: error.message || "DeepSeek API error",
+      provider: "openai",
+      message: error.message || "OpenAI API error",
       statusCode: mapProviderStatusToHttpStatus(error.status),
       details: {
         status: error.status,
@@ -162,8 +147,8 @@ function normalizeDeepSeekError(error: unknown): LlmError {
   }
 
   return new LlmError({
-    provider: "deepseek",
-    message: "Failed to call DeepSeek API",
+    provider: "openai",
+    message: "Failed to call OpenAI API",
     statusCode: 502,
     details: error instanceof Error ? error.message : error,
   });

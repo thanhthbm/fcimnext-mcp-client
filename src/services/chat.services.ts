@@ -5,18 +5,24 @@ import { conversationRepository } from "../repositories/conversation.repository.
 import { messageRepository } from "../repositories/message.repository.js";
 import { toolOrchestratorService } from "./tool-orchestrator.services.js";
 import { getToolDefinitions } from "../tools/tool-registry.js";
+import { skillContextService } from "./skill-context.services.js";
 import type {
   SendMessageInput,
   SendMessageOutput,
 } from "../types/chat.type.js";
 import type { LlmMessage } from "../types/llm.type.js";
-import { skillContextService } from "./skill-context.services.js";
 
 const MAX_TOOL_ROUNDS = 5;
+const RECENT_MESSAGE_LIMIT = 20;
+const DEFAULT_USER_ID = "dev-user";
 
 export const chatService = {
   async sendMessage(input: SendMessageInput): Promise<SendMessageOutput> {
-    const conversationId = await getOrCreateConversationId(input);
+    const userId = input.userId ?? DEFAULT_USER_ID;
+    const conversationId = await getOrCreateConversationId({
+      ...input,
+      userId,
+    });
 
     await messageRepository.create({
       conversationId,
@@ -26,12 +32,13 @@ export const chatService = {
 
     const recentMessages = await messageRepository.findRecentByConversationId(
       conversationId,
-      20,
+      RECENT_MESSAGE_LIMIT,
     );
 
-    const skillContext = await skillContextService.getSkillContextForMessage(
-      input.message,
-    );
+    const skillContext = await skillContextService.getSkillContextForMessage({
+      userMessage: input.message,
+      userId,
+    });
 
     const messages: LlmMessage[] = [
       ...(skillContext
@@ -47,6 +54,7 @@ export const chatService = {
 
     const finalAnswer = await runLlmToolLoop({
       conversationId,
+      userId,
       messages,
     });
 
@@ -59,10 +67,12 @@ export const chatService = {
 
 async function runLlmToolLoop(params: {
   conversationId: string;
+  userId: string;
   messages: LlmMessage[];
 }): Promise<string> {
-  const { conversationId, messages } = params;
-  const toolDefinitions = await getToolDefinitions();
+  const { conversationId, userId, messages } = params;
+
+  const toolDefinitions = await getToolDefinitions(userId);
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const llmResponse = await llmClient.chat({
@@ -99,8 +109,10 @@ async function runLlmToolLoop(params: {
       toolCalls,
     });
 
-    const toolResults =
-      await toolOrchestratorService.executeToolCall(toolCalls);
+    const toolResults = await toolOrchestratorService.executeToolCalls({
+      toolCalls,
+      userId,
+    });
 
     for (const toolResult of toolResults) {
       const toolContent = JSON.stringify(toolResult.content);

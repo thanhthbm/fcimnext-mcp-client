@@ -1,8 +1,22 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../errors/app-error.js";
+import { oauthTokenRepository } from "../repositories/oauth-token.repository.js";
 import { oauthService } from "../services/oauth.services.js";
-import { oauthTokenStore } from "../oauth/oauth-token.store.js";
+
+function getRequestUserId(req: Request): string {
+  return req.user?.id ?? "dev-user";
+}
+
+function getFrappeBaseUrl(): string {
+  const baseUrl = process.env.FRAPPE_BASE_URL;
+
+  if (!baseUrl) {
+    throw new AppError("Missing FRAPPE_BASE_URL", 500);
+  }
+
+  return baseUrl.replace(/\/$/, "");
+}
 
 export const oauthController = {
   async discovery(_req: Request, res: Response) {
@@ -16,12 +30,14 @@ export const oauthController = {
 
     return res.json({
       client,
-      note: "Save client_id to .env or database. Do not register a new client on every request in production.",
+      note: "OAuth client saved to database. Do not register a new client on every request in production.",
     });
   },
 
-  async connect(_req: Request, res: Response) {
-    const authorizationUrl = await oauthService.buildAuthorizationUrl();
+  async connect(req: Request, res: Response) {
+    const authorizationUrl = await oauthService.buildAuthorizationUrl({
+      userId: getRequestUserId(req),
+    });
 
     return res.redirect(authorizationUrl);
   },
@@ -48,24 +64,29 @@ export const oauthController = {
       state,
     });
 
-    oauthTokenStore.save({
+    const expiresAt = token.expires_in
+      ? new Date(Date.now() + token.expires_in * 1000)
+      : undefined;
+
+    const userId = token.userId ?? getRequestUserId(req);
+
+    await oauthTokenRepository.upsert({
+      frappeBaseUrl: getFrappeBaseUrl(),
+      userId,
       accessToken: token.access_token,
       refreshToken: token.refresh_token,
       idToken: token.id_token,
       tokenType: token.token_type,
       scope: token.scope,
-      expiresAt: token.expires_in
-        ? Date.now() + token.expires_in * 1000
-        : undefined,
+      expiresAt,
     });
 
     return res.json({
       message: "OAuth connected",
+      userId,
       tokenType: token.token_type,
       scope: token.scope,
-      expiresAt: token.expires_in
-        ? new Date(Date.now() + token.expires_in * 1000).toISOString()
-        : null,
+      expiresAt: expiresAt?.toISOString() ?? null,
     });
   },
 };

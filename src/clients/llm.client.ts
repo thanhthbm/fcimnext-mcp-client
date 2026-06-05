@@ -1,5 +1,7 @@
 import type { LlmClient, LlmMessage } from "../types/llm.type.js";
+import { claudeClient } from "./claude.client.js";
 import { deepseekClient } from "./deepseek.client.js";
+import { openaiClient } from "./openai.client.js";
 
 const mockClient: LlmClient = {
   async chat(input) {
@@ -66,6 +68,14 @@ function createLlmClient(): LlmClient {
 
   if (provider === "deepseek") {
     return deepseekClient;
+  }
+
+  if (provider === "openai") {
+    return openaiClient;
+  }
+
+  if (provider === "claude" || provider === "anthropic") {
+    return claudeClient;
   }
 
   return mockClient;

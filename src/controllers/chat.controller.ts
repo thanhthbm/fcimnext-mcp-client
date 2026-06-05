@@ -10,7 +10,7 @@ export const chatController = {
     const input: SendMessageInput = {
       message,
       conversationId,
-      userId: "dev-user",
+      userId: req.user?.id ?? "dev-user",
     };
 
     const result = await chatService.sendMessage(input);

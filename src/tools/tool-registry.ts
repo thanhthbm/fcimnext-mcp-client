@@ -15,6 +15,6 @@ export const toolDefinitions: ToolDefinition[] = [
 ];
 
 
-export async function getToolDefinitions(){
-    return mcpClient.listTools();
+export async function getToolDefinitions(userId?: string) {
+    return mcpClient.listTools({ userId });
 }

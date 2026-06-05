@@ -2,6 +2,7 @@ export type ToolCall = {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  userId?: string;
 };
 
 export type ToolResult = {
