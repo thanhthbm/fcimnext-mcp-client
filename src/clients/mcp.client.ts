@@ -1,27 +1,17 @@
-import type { ToolCall, ToolResult } from "../types/tool.type.js";
+import type { McpClient } from "../types/mcp.type.js";
+import { facMcpClient } from "./fac-mcp.client.js";
+import { mockMcpClient } from "./mock-mcp.client.js";
 
-export const mcpClient = {
-  async callTool(toolCall: ToolCall): Promise<ToolResult> {
-    if (toolCall.name === "get_current_time") {
-      return {
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        content: {
-          now: new Date().toISOString(),
-          timezone: "UTC",
-        },
-        isError: false,
-      };
-    }
+function createMcpClient(): McpClient {
+  const provider = (process.env.MCP_PROVIDER || "mock").trim().toLowerCase();
 
-    return {
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      content: {
-        message: "MCP mock result",
-        arguments: toolCall.arguments,
-      },
-      isError: false,
-    };
-  },
-};
+  console.log("Using MCP provider:", provider);
+
+  if (provider === "fac") {
+    return facMcpClient;
+  }
+
+  return mockMcpClient;
+}
+
+export const mcpClient = createMcpClient();

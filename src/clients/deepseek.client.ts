@@ -45,10 +45,12 @@ export const deepseekClient: LlmClient = {
       const toolCalls = responseMessage?.tool_calls
         ?.filter(isFunctionToolCall)
         .map((toolCall) => {
+          const args = safeParseJsonObject(toolCall.function.arguments || "{}");
+
           return {
             id: toolCall.id,
             name: toolCall.function.name,
-            arguments: safeParseJsonObject(toolCall.function.arguments),
+            arguments: args,
           } satisfies ToolCall;
         });
 
@@ -87,7 +89,7 @@ function toOpenAiMessage(message: LlmMessage) {
           type: "function" as const,
           function: {
             name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
+            arguments: JSON.stringify(toolCall.arguments ?? {}),
           },
         })),
       };

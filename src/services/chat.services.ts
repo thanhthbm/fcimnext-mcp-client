@@ -4,12 +4,13 @@ import { toLlmMessages } from "../mappers/message.mapper.js";
 import { conversationRepository } from "../repositories/conversation.repository.js";
 import { messageRepository } from "../repositories/message.repository.js";
 import { toolOrchestratorService } from "./tool-orchestrator.services.js";
-import { toolDefinitions } from "../tools/tool-registry.js";
+import { getToolDefinitions } from "../tools/tool-registry.js";
 import type {
   SendMessageInput,
   SendMessageOutput,
 } from "../types/chat.type.js";
 import type { LlmMessage } from "../types/llm.type.js";
+import { skillContextService } from "./skill-context.services.js";
 
 const MAX_TOOL_ROUNDS = 5;
 
@@ -28,7 +29,21 @@ export const chatService = {
       20,
     );
 
-    const messages: LlmMessage[] = toLlmMessages(recentMessages);
+    const skillContext = await skillContextService.getSkillContextForMessage(
+      input.message,
+    );
+
+    const messages: LlmMessage[] = [
+      ...(skillContext
+        ? [
+            {
+              role: "system" as const,
+              content: `Relevant Frappe Assistant Core skills:\n\n${skillContext}`,
+            },
+          ]
+        : []),
+      ...toLlmMessages(recentMessages),
+    ];
 
     const finalAnswer = await runLlmToolLoop({
       conversationId,
@@ -47,6 +62,7 @@ async function runLlmToolLoop(params: {
   messages: LlmMessage[];
 }): Promise<string> {
   const { conversationId, messages } = params;
+  const toolDefinitions = await getToolDefinitions();
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const llmResponse = await llmClient.chat({

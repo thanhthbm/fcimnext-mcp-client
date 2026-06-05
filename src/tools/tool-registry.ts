@@ -1,3 +1,4 @@
+import { mcpClient } from "../clients/mcp.client.js";
 import type { ToolDefinition } from "../types/tool.type.js";
 
 export const toolDefinitions: ToolDefinition[] = [
@@ -12,3 +13,8 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
 ];
+
+
+export async function getToolDefinitions(){
+    return mcpClient.listTools();
+}
