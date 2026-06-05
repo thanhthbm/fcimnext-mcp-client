@@ -85,12 +85,65 @@ export const oauthController = {
       expiresAt,
     });
 
-    return res.json({
-      message: "OAuth connected",
-      userId,
-      tokenType: token.token_type,
-      scope: token.scope,
-      expiresAt: expiresAt?.toISOString() ?? null,
-    });
+    return res.type("html").send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>OAuth Connected</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding: 32px;
+        color: #0f172a;
+      }
+      .card {
+        max-width: 480px;
+        margin: 80px auto;
+        padding: 24px;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+      }
+      .title {
+        font-size: 20px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="title">OAuth connected</div>
+      <div class="muted">You can close this window and return to Fcimnext Assistant.</div>
+    </div>
+
+    <script>
+      try {
+        if (window.opener) {
+          window.opener.postMessage(
+            {
+              type: "FCIM_ASSISTANT_OAUTH_CONNECTED",
+              userId: ${JSON.stringify(userId)},
+              expiresAt: ${JSON.stringify(expiresAt?.toISOString() ?? null)}
+            },
+            "*"
+          );
+        }
+
+        setTimeout(function () {
+          window.close();
+        }, 600);
+      } catch (error) {
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>
+`);
   },
 };
