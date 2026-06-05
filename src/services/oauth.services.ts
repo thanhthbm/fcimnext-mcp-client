@@ -139,7 +139,7 @@ export const oauthService = {
     oauthStateStore.save(state, {
       codeVerifier,
       createdAt: Date.now(),
-      userId: params?.userId,
+      userId: params?.userId ?? "dev-user",
     });
 
     const url = new URL(discovery.authorization_endpoint);

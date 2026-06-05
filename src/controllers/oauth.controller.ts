@@ -5,6 +5,10 @@ import { oauthTokenRepository } from "../repositories/oauth-token.repository.js"
 import { oauthService } from "../services/oauth.services.js";
 
 function getRequestUserId(req: Request): string {
+  if (typeof req.query.userId === "string" && req.query.userId.trim()) {
+    return req.query.userId.trim();
+  }
+
   return req.user?.id ?? "dev-user";
 }
 
